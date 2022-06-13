@@ -3,28 +3,28 @@ import math
 
 import numpy as np
 from PIL import Image
+import PIL
 from torchvision import datasets
 from torchvision import transforms
-from torchvision.transforms import InterpolationMode
+import torch
 
-from augmentation import RandAugmentCIFAR
-from augment import TrivialAugmentWide
+from augmentation import RandAugment
+from efficientnet_pytorch import EfficientNet
 
 logger = logging.getLogger(__name__)
 
-cifar10_mean = (0.491400, 0.482158, 0.4465231)
-cifar10_std = (0.247032, 0.243485, 0.2615877)
-cifar100_mean = (0.507075, 0.486549, 0.440918)
-cifar100_std = (0.267334, 0.256438, 0.276151)
+custom_mean = (0.485, 0.456, 0.406) 
+custom_std = (0.229, 0.224, 0.225)
 normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
 
 
-def get_cifar10(args):
+def get_custom_dataset(args):
+    args.resize = EfficientNet.get_image_size(args.arch)
     if args.randaug:
         n, m = args.randaug
     else:
-        n, m = 2, 10  # default
+        n, m = 2, 16  # default
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(size=args.resize,
@@ -32,7 +32,7 @@ def get_cifar10(args):
                               fill=128,
                               padding_mode='constant'),
         transforms.ToTensor(),
-        transforms.Normalize(mean=cifar10_mean, std=cifar10_std),
+        transforms.Normalize(mean=custom_mean, std=custom_std),
     ])
     transform_finetune = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -40,135 +40,44 @@ def get_cifar10(args):
                               padding=int(args.resize * 0.125),
                               fill=128,
                               padding_mode='constant'),
-        RandAugmentCIFAR(n=n, m=m),
+        RandAugment(n=n, m=m),
         transforms.ToTensor(),
-        transforms.Normalize(mean=cifar10_mean, std=cifar10_std),
+        transforms.Normalize(mean=custom_mean, std=custom_std),
     ])
     transform_val = transforms.Compose([
+        transforms.Resize(args.resize, interpolation=PIL.Image.BICUBIC),
+        transforms.CenterCrop(args.resize),
         transforms.ToTensor(),
-        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
+        transforms.Normalize(mean=custom_mean, std=custom_std)
     ])
-    base_dataset = datasets.CIFAR10(args.data_path, train=True, download=True)
+    
+    
+    train_labeled_dataset = datasets.ImageFolder(
+    '../data/train',
+    transform_labeled)
 
-    train_labeled_idxs, train_unlabeled_idxs, finetune_idxs = x_u_split(args, base_dataset.targets)
-
-    train_labeled_dataset = CIFAR10SSL(
-        args.data_path, train_labeled_idxs, train=True,
-        transform=transform_labeled
-    )
-    finetune_dataset = CIFAR10SSL(
-        args.data_path, finetune_idxs, train=True,
-        transform=transform_finetune
-    )
-    train_unlabeled_dataset = CIFAR10SSL(
-        args.data_path, train_unlabeled_idxs,
-        train=True,
-        transform=TransformMPL(args, mean=cifar10_mean, std=cifar10_std)
+    train_unlabeled_dataset = torch.utils.data.ConcatDataset(
+        [datasets.ImageFolder('../data/train', TransformMPL(args, mean=custom_mean, std=custom_std)),
+        datasets.ImageFolder('../data/valid', TransformMPL(args, mean=custom_mean, std=custom_std)),
+        datasets.ImageFolder('../data/test', TransformMPL(args, mean=custom_mean, std=custom_std))]
     )
 
-    test_dataset = datasets.CIFAR10(args.data_path, train=False,
-                                    transform=transform_val, download=False)
-
-    return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset
-
-
-def get_cifar100(args):
-    if args.randaug:
-        n, m = args.randaug
-    else:
-        n, m = 2, 10  # default
-    transform_labeled = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=args.resize,
-                              padding=int(args.resize * 0.125),
-                              fill=128,
-                              padding_mode='constant'),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
-    transform_finetune = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=args.resize,
-                              padding=int(args.resize * 0.125),
-                              fill=128,
-                              padding_mode='constant'),
-        RandAugmentCIFAR(n=n, m=m),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
-
-    transform_val = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
-
-    base_dataset = datasets.CIFAR100(args.data_path, train=True, download=True)
-
-    train_labeled_idxs, train_unlabeled_idxs, finetune_idxs = x_u_split(args, base_dataset.targets)
-
-    train_labeled_dataset = CIFAR100SSL(
-        args.data_path, train_labeled_idxs, train=True,
-        transform=transform_labeled
-    )
-    finetune_dataset = CIFAR100SSL(
-        args.data_path, finetune_idxs, train=True,
-        transform=transform_fintune
-    )
-    train_unlabeled_dataset = CIFAR100SSL(
-        args.data_path, train_unlabeled_idxs, train=True,
-        transform=TransformMPL(args, mean=cifar100_mean, std=cifar100_std)
+    finetune_dataset = datasets.ImageFolder(
+        '../data/train',
+        transform_finetune
     )
 
-    test_dataset = datasets.CIFAR100(args.data_path, train=False,
-                                     transform=transform_val, download=False)
+    valid_dataset = datasets.ImageFolder(
+        '../data/valid',
+        transform_val
+    )
+    test_dataset = datasets.ImageFolder(
+        '../data/test',
+        transform_val
+    )
+    
 
-    return train_labeled_dataset, train_unlabeled_dataset, test_dataset, finetune_dataset
-
-
-def x_u_split(args, labels):
-    label_per_class = args.num_labeled // args.num_classes
-    labels = np.array(labels)
-    labeled_idx = []
-    # unlabeled data: all training data
-    unlabeled_idx = np.array(range(len(labels)))
-    for i in range(args.num_classes):
-        idx = np.where(labels == i)[0]
-        idx = np.random.choice(idx, label_per_class, False)
-        labeled_idx.extend(idx)
-    labeled_idx = np.array(labeled_idx)
-    assert len(labeled_idx) == args.num_labeled
-
-    if args.expand_labels or args.num_labeled < args.batch_size:
-        num_expand_x = math.ceil(
-            args.batch_size * args.eval_step / args.num_labeled)
-        labeled_idx_ex = np.hstack([labeled_idx for _ in range(num_expand_x)])
-        np.random.shuffle(labeled_idx_ex)
-        np.random.shuffle(labeled_idx)
-        return labeled_idx_ex, unlabeled_idx, labeled_idx
-    else:
-        np.random.shuffle(labeled_idx)
-        return labeled_idx, unlabeled_idx, lebeled_idx
-
-
-def x_u_split_test(args, labels):
-    label_per_class = args.num_labeled // args.num_classes
-    labels = np.array(labels)
-    labeled_idx = []
-    unlabeled_idx = []
-    for i in range(args.num_classes):
-        idx = np.where(labels == i)[0]
-        np.random.shuffle(idx)
-        labeled_idx.extend(idx[:label_per_class])
-        unlabeled_idx.extend(idx[label_per_class:])
-    labeled_idx = np.array(labeled_idx)
-    unlabeled_idx = np.array(unlabeled_idx)
-    assert len(labeled_idx) == args.num_labeled
-
-    if args.expand_labels or args.num_labeled < args.batch_size:
-        num_expand_x = math.ceil(
-            args.batch_size * args.eval_step / args.num_labeled)
-        labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
-
-    np.random.shuffle(labeled_idx)
-    np.random.shuffle(unlabeled_idx)
-    return labeled_idx, unlabeled_idx
+    return train_labeled_dataset, train_unlabeled_dataset, valid_dataset, test_dataset, finetune_dataset
 
 
 class TransformMPL(object):
@@ -190,7 +99,7 @@ class TransformMPL(object):
                                   padding=int(args.resize * 0.125),
                                   fill=128,
                                   padding_mode='constant'),
-            RandAugmentCIFAR(n=n, m=m)])
+            RandAugment(n=n, m=m)])
         self.normalize = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std)])
@@ -201,55 +110,4 @@ class TransformMPL(object):
         return self.normalize(ori), self.normalize(aug)
 
 
-class CIFAR10SSL(datasets.CIFAR10):
-    def __init__(self, root, indexs, train=True,
-                 transform=None, target_transform=None,
-                 download=False):
-        super().__init__(root, train=train,
-                         transform=transform,
-                         target_transform=target_transform,
-                         download=download)
-        if indexs is not None:
-            self.data = self.data[indexs]
-            self.targets = np.array(self.targets)[indexs]
-
-    def __getitem__(self, index):
-        img, target = self.data[index], self.targets[index]
-        img = Image.fromarray(img)
-
-        if self.transform is not None:
-            img = self.transform(img)
-
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
-        return img, target
-
-
-class CIFAR100SSL(datasets.CIFAR100):
-    def __init__(self, root, indexs, train=True,
-                 transform=None, target_transform=None,
-                 download=False):
-        super().__init__(root, train=train,
-                         transform=transform,
-                         target_transform=target_transform,
-                         download=download)
-        if indexs is not None:
-            self.data = self.data[indexs]
-            self.targets = np.array(self.targets)[indexs]
-
-    def __getitem__(self, index):
-        img, target = self.data[index], self.targets[index]
-        img = Image.fromarray(img)
-
-        if self.transform is not None:
-            img = self.transform(img)
-
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
-        return img, target
-
-
-DATASET_GETTERS = {'cifar10': get_cifar10,
-                   'cifar100': get_cifar100}
+DATASET_GETTERS = {'custom' : get_custom_dataset}

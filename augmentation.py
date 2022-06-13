@@ -278,7 +278,6 @@ class RandAugment(object):
         FILL_COLOR = fill
         self.n = int(n)
         self.m = m
-        self.mstd = mstd
         self.augment_pool = rand_augment_pool()
 
     def __call__(self, img):
