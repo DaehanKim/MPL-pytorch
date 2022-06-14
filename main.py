@@ -6,6 +6,7 @@ import random
 import time
 
 import torch.multiprocessing as mp
+from sklearn.metrics import f1_score
 import numpy as np
 import torch
 from torch.cuda import amp
@@ -28,57 +29,59 @@ from utils import (AverageMeter, accuracy, create_loss_fn,
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--name', type=str, default="mpl-test", help='experiment name')
+parser.add_argument('--name', type=str, default="mpl-th090ema05gaccum-cosine", help='experiment name')
 parser.add_argument('--data-path', default='../data', type=str, help='data path')
 parser.add_argument('--save-path', default='checkpoint', type=str, help='save path')
 parser.add_argument('--dataset', default='custom', type=str,
                     choices=['custom'], help='dataset name')
 parser.add_argument('--num-labeled', type=int, default=500, help='number of labeled data')
-parser.add_argument("--expand-labels", default=1.0, type=float, help="expand labels to fit eval steps")
+parser.add_argument("--expand-labels", default=True, type=bool, help="expand labels to fit eval steps")
 parser.add_argument('--total-steps', default=1890, type=int, help='number of total steps to run')
-parser.add_argument('--eval-step', default=10, type=int, help='number of eval steps to run')
+parser.add_argument('--eval-step', default=100, type=int, help='number of eval steps to run')
 parser.add_argument('--start-step', default=0, type=int,
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--workers', default=4, type=int, help='number of workers')
 parser.add_argument('--num-classes', default=50, type=int, help='number of classes')
 parser.add_argument('--resize', default=-1, type=int, help='resize image')
-parser.add_argument('--batch-size', default=8, type=int, help='train batch size')
-parser.add_argument('--teacher-dropout', default=0.2, type=float, help='dropout on last dense layer')
-parser.add_argument('--student-dropout', default=0.2, type=float, help='dropout on last dense layer')
-parser.add_argument('--teacher_lr', default=0.05, type=float, help='train learning late')
-parser.add_argument('--student_lr', default=0.05, type=float, help='train learning late')
+parser.add_argument('--batch-size', default=3, type=int, help='train batch size')
+parser.add_argument('--teacher-dropout', default=0.1, type=float, help='dropout on last dense layer')
+parser.add_argument('--student-dropout', default=0.1, type=float, help='dropout on last dense layer')
+parser.add_argument('--teacher_lr', default=0.01, type=float, help='train learning late')
+parser.add_argument('--student_lr', default=0.01, type=float, help='train learning late')
 parser.add_argument('--momentum', default=0.9, type=float, help='SGD Momentum')
-parser.add_argument('--nesterov', default=1.0, type=float, help='use nesterov')
-parser.add_argument('--weight-decay', default=5e-4, type=float, help='train weight decay')
-parser.add_argument('--ema', default=0.995, type=float, help='EMA decay rate')
-parser.add_argument('--warmup-steps', default=30, type=int, help='warmup steps')
+parser.add_argument('--nesterov', default=True, type=bool, help='use nesterov')
+parser.add_argument('--weight-decay', default=1e-4, type=float, help='train weight decay')
+parser.add_argument('--ema', default=0.5, type=float, help='EMA decay rate')
+parser.add_argument('--warmup-steps', default=0, type=int, help='warmup steps')
 parser.add_argument('--student-wait-steps', default=20, type=int, help='warmup steps')
-parser.add_argument('--grad-clip', default=1e9, type=float, help='gradient norm clipping')
+parser.add_argument('--grad-clip', default=1e1, type=float, help='gradient norm clipping')
 parser.add_argument('--resume', default='', type=str, help='path to checkpoint')
 parser.add_argument('--evaluate', action='store_true', help='only evaluate model on validation set')
 parser.add_argument('--finetune', action='store_true',
                     help='only finetune model on labeled dataset')
-parser.add_argument('--finetune-epochs', default=625, type=int, help='finetune epochs')
-parser.add_argument('--finetune-batch-size', default=512, type=int, help='finetune batch size')
-parser.add_argument('--finetune-lr', default=3e-5, type=float, help='finetune learning late')
+parser.add_argument('--finetune-epochs', default=30, type=int, help='finetune epochs')
+parser.add_argument('--finetune-batch-size', default=8, type=int, help='finetune batch size')
+parser.add_argument('--finetune-lr', default=0.01, type=float, help='finetune learning late')
 parser.add_argument('--finetune-weight-decay', default=0, type=float, help='finetune weight decay')
 parser.add_argument('--finetune-momentum', default=0.9, type=float, help='finetune SGD Momentum')
 parser.add_argument('--seed', default=None, type=int, help='seed for initializing training')
 parser.add_argument('--label-smoothing', default=0.15, type=float, help='label smoothing alpha')
 parser.add_argument('--mu', default=1, type=int, help='coefficient of unlabeled batch size')
-parser.add_argument('--threshold', default=0.6, type=float, help='pseudo label threshold')
-parser.add_argument('--temperature', default=0.7, type=float, help='pseudo label temperature')
-parser.add_argument('--lambda-u', default=8.5, type=float, help='coefficient of unlabeled loss')
-parser.add_argument('--uda-steps', default=30, type=float, help='warmup steps of lambda-u')
+parser.add_argument('--threshold', default=0.90, type=float, help='pseudo label threshold')
+parser.add_argument('--temperature', default=1.0, type=float, help='pseudo label temperature')
+parser.add_argument('--lambda-u', default=8, type=float, help='coefficient of unlabeled loss')
+parser.add_argument('--uda-steps', default=200, type=float, help='warmup steps of lambda-u')
 parser.add_argument("--randaug", nargs="+", type=int, help="use it like this. --randaug 2 10")
-parser.add_argument("--amp", default=1.0, type=float, help="use 16-bit (mixed) precision")
-parser.add_argument('--world-size', default=2, type=int,
+parser.add_argument("--amp", default=True, type=bool, help="use 16-bit (mixed) precision")
+parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
-parser.add_argument("--local_rank", type=int, default=0,
+parser.add_argument("--local_rank", type=int, default=-1,
                     help="For distributed training: local_rank")
 parser.add_argument("--arch", type=str, default="efficientnet-b7",
                     help="name of efficientnet architecture")
-
+parser.add_argument("--gpu", default=2, type=int)
+parser.add_argument("--grad-accum-steps", default=3, type=int)
+parser.add_argument("--scheduler_type", type=str, default='cosine')
 
 def set_seed(args):
     random.seed(args.seed)
@@ -86,6 +89,11 @@ def set_seed(args):
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
+def get_scheduler_fn(args):
+    if args.scheduler_type == 'constant':
+        return get_constant_scheduler
+    elif args.scheduler_type == 'cosine':
+        return get_cosine_schedule_with_warmup
 
 def get_cosine_schedule_with_warmup(optimizer,
                                     num_warmup_steps,
@@ -106,6 +114,16 @@ def get_cosine_schedule_with_warmup(optimizer,
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
+def get_constant_scheduler(optimizer, 
+                        num_warmup_steps,
+                        num_training_steps,
+                        num_wait_steps=0,
+                        num_cycles=0.5,
+                        last_epoch=-1):
+    def lr_lambda(current_step):
+        return 1.
+
+    return LambdaLR(optimizer, lr_lambda, last_epoch)    
 
 def get_lr(optimizer):
     return optimizer.param_groups[0]['lr']
@@ -133,7 +151,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
     # nn.init.uniform_(moving_dot_product, -limit, limit)
 
     for step in range(args.start_step, args.total_steps):
-        if (step+1) % args.eval_step == 0:
+        if (step) % args.eval_step == 0:
             pbar = tqdm(range(args.eval_step), disable=args.local_rank not in [-1, 0])
             batch_time = AverageMeter()
             data_time = AverageMeter()
@@ -200,13 +218,16 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             s_loss_l_old = F.cross_entropy(s_logits_l.detach(), targets)
             s_loss = criterion(s_logits_us, hard_pseudo_label)
 
-        s_scaler.scale(s_loss).backward()
-        if args.grad_clip > 0:
-            s_scaler.unscale_(s_optimizer)
-            nn.utils.clip_grad_norm_(student_model.parameters(), args.grad_clip)
-        s_scaler.step(s_optimizer)
-        s_scaler.update()
-        s_scheduler.step()
+        
+
+        s_scaler.scale(s_loss/args.grad_accum_steps).backward()
+        if (step+1) % args.grad_accum_steps == 0 : # gradient accumulation
+            if args.grad_clip > 0:
+                s_scaler.unscale_(s_optimizer)
+                nn.utils.clip_grad_norm_(student_model.parameters(), args.grad_clip)    
+            s_scaler.step(s_optimizer)
+            s_scaler.update()
+            s_scheduler.step()
         if args.ema > 0:
             avg_student_model.update_parameters(student_model)
 
@@ -229,16 +250,18 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
             # t_loss_mpl = torch.tensor(0.).to(args.device)
             t_loss = t_loss_uda + t_loss_mpl
 
-        t_scaler.scale(t_loss).backward()
-        if args.grad_clip > 0:
-            t_scaler.unscale_(t_optimizer)
-            nn.utils.clip_grad_norm_(teacher_model.parameters(), args.grad_clip)
-        t_scaler.step(t_optimizer)
-        t_scaler.update()
-        t_scheduler.step()
+        t_scaler.scale(t_loss/args.grad_accum_steps).backward()
 
-        teacher_model.zero_grad()
-        student_model.zero_grad()
+        if (step+1) % args.grad_accum_steps == 0 :
+            if args.grad_clip > 0:
+                t_scaler.unscale_(t_optimizer)
+                nn.utils.clip_grad_norm_(teacher_model.parameters(), args.grad_clip)
+            t_scaler.step(t_optimizer)
+            t_scaler.update()
+            t_scheduler.step()
+
+            teacher_model.zero_grad()
+            student_model.zero_grad()
 
         if args.world_size > 1:
             s_loss = reduce_tensor(s_loss.detach(), args.world_size)
@@ -284,22 +307,27 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
                            "train/6.mask": mean_mask.avg})
 
                 test_model = avg_student_model if avg_student_model is not None else student_model
-                test_loss, top1, top5 = evaluate(args, test_loader, test_model, criterion)
+                test_loss, top1, top5, f1 = evaluate(args, test_loader, test_model, criterion)
 
                 args.writer.add_scalar("test/loss", test_loss, args.num_eval)
                 args.writer.add_scalar("test/acc@1", top1, args.num_eval)
                 args.writer.add_scalar("test/acc@5", top5, args.num_eval)
+                args.writer.add_scalar("test/f1", f1, args.num_eval)
                 wandb.log({"test/loss": test_loss,
                            "test/acc@1": top1,
-                           "test/acc@5": top5})
+                           "test/acc@5": top5,
+                           "test/f1" : f1})
 
-                is_best = top1 > args.best_top1
+                is_best = f1 > args.best_f1
                 if is_best:
                     args.best_top1 = top1
                     args.best_top5 = top5
+                    args.best_f1 = f1
 
                 logger.info(f"top-1 acc: {top1:.2f}")
-                logger.info(f"Best top-1 acc: {args.best_top1:.2f}")
+                logger.info(f"top-5 acc: {top5:.2f}")
+                logger.info(f"Best f1: {args.best_f1:.4f}")
+                logger.info(f"f1: {f1:.4f}")
 
                 save_checkpoint(args, {
                     'step': step + 1,
@@ -308,6 +336,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
                     'avg_state_dict': avg_student_model.state_dict() if avg_student_model is not None else None,
                     'best_top1': args.best_top1,
                     'best_top5': args.best_top5,
+                    'best_f1' : args.best_f1,
                     'teacher_optimizer': t_optimizer.state_dict(),
                     'student_optimizer': s_optimizer.state_dict(),
                     'teacher_scheduler': t_scheduler.state_dict(),
@@ -317,8 +346,8 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dat
                 }, is_best)
 
     if args.local_rank in [-1, 0]:
-        args.writer.add_scalar("result/test_acc@1", args.best_top1)
-        wandb.log({"result/test_acc@1": args.best_top1})
+        args.writer.add_scalar("result/f1", args.best_f1)
+        wandb.log({"result/f1": args.best_f1})
 
     # finetune
     del t_scaler, t_scheduler, t_optimizer, teacher_model, labeled_loader, unlabeled_loader
@@ -341,6 +370,7 @@ def evaluate(args, test_loader, model, criterion):
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
+    pred, true = [], []
     model.eval()
     test_iter = tqdm(test_loader, disable=args.local_rank not in [-1, 0])
     with torch.no_grad():
@@ -359,14 +389,25 @@ def evaluate(args, test_loader, model, criterion):
             top1.update(acc1[0], batch_size)
             top5.update(acc5[0], batch_size)
             batch_time.update(time.time() - end)
+            
+            # for f1 score
+            _pred = outputs.argmax(1).detach().cpu()
+            pred.append(_pred)
+            true.append(targets.detach().cpu())
+            
             end = time.time()
             test_iter.set_description(
                 f"Test Iter: {step+1:3}/{len(test_loader):3}. Data: {data_time.avg:.2f}s. "
                 f"Batch: {batch_time.avg:.2f}s. Loss: {losses.avg:.4f}. "
                 f"top1: {top1.avg:.2f}. top5: {top5.avg:.2f}. ")
 
+        # compute f1 score
+        pred = torch.cat(pred, dim=0)
+        true = torch.cat(true, dim=0)
+        f1 = f1_score(pred, true, average='macro')*100.
+
         test_iter.close()
-        return losses.avg, top1.avg, top5.avg
+        return losses.avg, top1.avg, top5.avg, f1
 
 
 def finetune(args, finetune_dataset, test_loader, model, criterion):
@@ -403,13 +444,16 @@ def finetune(args, finetune_dataset, test_loader, model, criterion):
             images = images.to(args.device)
             targets = targets.to(args.device)
             with amp.autocast(enabled=args.amp):
-                model.zero_grad()
+
+                if (step+1) % args.grad_accum_steps == 0 : # gradient accumulation
+                    model.zero_grad()
                 outputs = model(images)
                 loss = criterion(outputs, targets)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            scaler.scale(loss/args.grad_accum_steps).backward()
+            if (step+1) % args.grad_accum_steps == 0 : # gradient accumulation
+                scaler.step(optimizer)
+                scaler.update()
 
             if args.world_size > 1:
                 loss = reduce_tensor(loss.detach(), args.world_size)
@@ -421,51 +465,58 @@ def finetune(args, finetune_dataset, test_loader, model, criterion):
         labeled_iter.close()
         if args.local_rank in [-1, 0]:
             args.writer.add_scalar("finetune/train_loss", losses.avg, epoch)
-            test_loss, top1, top5 = evaluate(args, test_loader, model, criterion)
+            test_loss, top1, top5, f1 = evaluate(args, test_loader, model, criterion)
             args.writer.add_scalar("finetune/test_loss", test_loss, epoch)
             args.writer.add_scalar("finetune/acc@1", top1, epoch)
             args.writer.add_scalar("finetune/acc@5", top5, epoch)
+            args.writer.add_scalar("finetune/f1", f1, epoch)
             wandb.log({"finetune/train_loss": losses.avg,
                        "finetune/test_loss": test_loss,
                        "finetune/acc@1": top1,
-                       "finetune/acc@5": top5})
+                       "finetune/acc@5": top5,
+                       "finetune/f1" : f1})
 
-            is_best = top1 > args.best_top1
+            is_best = f1 > args.best_f1
             if is_best:
                 args.best_top1 = top1
                 args.best_top5 = top5
+                args.best_f1 = f1
 
-            logger.info(f"top-1 acc: {top1:.2f}")
-            logger.info(f"Best top-1 acc: {args.best_top1:.2f}")
+                logger.info(f"Best f1: {args.best_f1:.4f}")
+                logger.info(f"f1: {f1:.4f}")
+                logger.info(f"top-1 acc: {top1:.2f}")
 
             save_checkpoint(args, {
                 'step': step + 1,
                 'best_top1': args.best_top1,
                 'best_top5': args.best_top5,
+                'best_f1': args.best_f1,
                 'student_state_dict': model.state_dict(),
                 'avg_state_dict': None,
                 'student_optimizer': optimizer.state_dict(),
             }, is_best, finetune=True)
         if args.local_rank in [-1, 0]:
-            args.writer.add_scalar("result/finetune_acc@1", args.best_top1)
-            wandb.log({"result/finetune_acc@1": args.best_top1})
+            args.writer.add_scalar("result/finetune_f1", args.best_f1)
+            wandb.log({"result/finetune_f1": args.best_f1})
+
     return
 
 
 def main():
     args = parser.parse_args()
+    # args.finetune_epochs = int(args.finetune_epochs * (8/args.batch_size))
+    args.total_steps = int(args.total_steps* (8/args.batch_size) * args.grad_accum_steps)
+    args.warmup_steps = int(args.warmup_steps* (8/args.batch_size))
+    args.eval_step = int(args.eval_step* args.grad_accum_steps)
+
+    # args.uda_steps = int(args.uda_steps* (8/args.batch_size))
+    # args.student_wait_steps = int(args.student_wait_steps* (8/args.batch_size))
+
     args.best_top1 = 0.
     args.best_top5 = 0.
+    args.best_f1 = 0.
 
-    if args.local_rank != -1:
-        args.gpu = args.local_rank
-        torch.distributed.init_process_group(backend='nccl')
-        args.world_size = torch.distributed.get_world_size()
-        # args.world_size = torch.distributed.get_world_size()
-        
-    else:
-        args.gpu = 0
-        args.world_size = 1
+    args.world_size = 1
 
     args.device = torch.device('cuda', args.gpu)
 
@@ -517,6 +568,11 @@ def main():
                              batch_size=args.batch_size,
                              num_workers=args.workers)
 
+    val_loader = DataLoader(valid_dataset,
+                             sampler=SequentialSampler(valid_dataset),
+                             batch_size=args.batch_size,
+                             num_workers=args.workers)
+
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
@@ -560,10 +616,10 @@ def main():
                             momentum=args.momentum,
                             nesterov=args.nesterov)
 
-    t_scheduler = get_cosine_schedule_with_warmup(t_optimizer,
+    t_scheduler = get_scheduler_fn(args)(t_optimizer,
                                                   args.warmup_steps,
                                                   args.total_steps)
-    s_scheduler = get_cosine_schedule_with_warmup(s_optimizer,
+    s_scheduler = get_scheduler_fn(args)(s_optimizer,
                                                   args.warmup_steps,
                                                   args.total_steps,
                                                   args.student_wait_steps)
@@ -612,18 +668,19 @@ def main():
     if args.finetune:
         del t_scaler, t_scheduler, t_optimizer, teacher_model, unlabeled_loader
         del s_scaler, s_scheduler, s_optimizer
-        finetune(args, finetune_dataset, test_loader, student_model, criterion)
+        finetune(args, finetune_dataset, val_loader, student_model, criterion)
         return
 
     if args.evaluate:
         del t_scaler, t_scheduler, t_optimizer, teacher_model, unlabeled_loader, labeled_loader
         del s_scaler, s_scheduler, s_optimizer
+        # evaluate(args, val_loader, student_model, criterion)
         evaluate(args, test_loader, student_model, criterion)
         return
 
     teacher_model.zero_grad()
     student_model.zero_grad()
-    train_loop(args, labeled_loader, unlabeled_loader, test_loader, finetune_dataset,
+    train_loop(args, labeled_loader, unlabeled_loader, val_loader, finetune_dataset,
                teacher_model, student_model, avg_student_model, criterion,
                t_optimizer, s_optimizer, t_scheduler, s_scheduler, t_scaler, s_scaler)
     return

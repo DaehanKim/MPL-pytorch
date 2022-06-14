@@ -22,7 +22,7 @@ def create_loss_fn(args):
     # if args.label_smoothing > 0:
     #     criterion = SmoothCrossEntropyV2(alpha=args.label_smoothing)
     # else:  
-    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    criterion = nn.CrossEntropyLoss()
     return criterion.to(args.device)
 
 

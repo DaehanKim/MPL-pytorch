@@ -26,20 +26,14 @@ def get_custom_dataset(args):
     else:
         n, m = 2, 16  # default
     transform_labeled = transforms.Compose([
+        transforms.RandomResizedCrop(args.resize),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=args.resize,
-                              padding=int(args.resize * 0.125),
-                              fill=128,
-                              padding_mode='constant'),
         transforms.ToTensor(),
         transforms.Normalize(mean=custom_mean, std=custom_std),
     ])
     transform_finetune = transforms.Compose([
+        transforms.RandomResizedCrop(args.resize),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=args.resize,
-                              padding=int(args.resize * 0.125),
-                              fill=128,
-                              padding_mode='constant'),
         RandAugment(n=n, m=m),
         transforms.ToTensor(),
         transforms.Normalize(mean=custom_mean, std=custom_std),
@@ -88,17 +82,11 @@ class TransformMPL(object):
             n, m = 2, 10  # default
 
         self.ori = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(size=args.resize,
-                                  padding=int(args.resize * 0.125),
-                                  fill=128,
-                                  padding_mode='constant')])
+            transforms.RandomResizedCrop(args.resize),
+            transforms.RandomHorizontalFlip()])
         self.aug = transforms.Compose([
+            transforms.RandomResizedCrop(args.resize),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(size=args.resize,
-                                  padding=int(args.resize * 0.125),
-                                  fill=128,
-                                  padding_mode='constant'),
             RandAugment(n=n, m=m)])
         self.normalize = transforms.Compose([
             transforms.ToTensor(),
